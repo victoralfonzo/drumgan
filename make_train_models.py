@@ -1,14 +1,15 @@
 import tensorflow as tf
-#from tqdm import tdqm
 import numpy as np
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Activation, Conv1DTranspose, Conv1D, Reshape, Input, ReLU, UpSampling1D, LeakyReLU
 import json
 import time
+import sys
 from scipy.io.wavfile import write as wavwrite
 
-EPOCHS = 300
+tf.compat.v1.enable_eager_execution
 
+EPOCHS = 300
 def makeGen():
     model = tf.keras.Sequential()
     model.add(Input(shape = (100,)))
@@ -39,6 +40,7 @@ def makeGen():
 
     model.add(Activation('tanh'))
     return model
+
 
 def makeDisc():
     model = tf.keras.Sequential()
@@ -76,14 +78,22 @@ def generator_loss(fake_output):
     return -tf.reduce_mean(fake_output)
 
 def discriminator_loss(real_sample, fake_sample):
+    #print(real_sample, fake_sample)
     real_loss = tf.reduce_mean(real_sample)
     fake_loss = tf.reduce_mean(fake_sample)
-    return fake_loss - real_loss
+    #print('real_loss')
+    #print(real_loss)
+    #print('fake_loss')
+    #print(fake_loss)
+    loss = fake_loss - real_loss
+    #print('loss')
+    #print(loss.shape)
+    return loss
 
 def gradient_penalty(batch_size, real_samples, fake_samples):
     alpha = tf.random.uniform(shape = [batch_size, 1,1], minval = 0., maxval = 1.)
-    print(real_samples.shape)
-    print(fake_samples.shape)
+    #print(real_samples.shape)
+    #print(fake_samples.shape)
     
     diff = fake_samples - real_samples
     interp = real_samples + (alpha * diff)
@@ -95,44 +105,62 @@ def gradient_penalty(batch_size, real_samples, fake_samples):
     return tf.reduce_mean((norm-1.0) ** 2)
 
 @tf.function
-def train_step(real_samples, dpg = 5):
+def train_step(real_samples, which,dpg = 5):
     batch_size = 64
-    for i in range(dpg):
+    if(which != 'simple'):
+        for _ in range(dpg):
+            random_latent_vectors = tf.random.normal(shape = (batch_size, 100))
+            with tf.GradientTape() as tape:
+                fake_samples = generator(random_latent_vectors, training = True)
+                fake_logits = discriminator(fake_samples, training = True)
+                real_logits = discriminator(real_samples, training = True)
+                d_loss = discriminator_loss(real_logits, fake_logits)
+                
+                gp = gradient_penalty(batch_size, real_samples, fake_samples)
+                d_loss = d_loss + (gp * 10)
+                
+            d_gradients = tape.gradient(d_loss, discriminator.trainable_variables)
+            discriminator_optimizer.apply_gradients(zip(d_gradients, discriminator.trainable_variables))
+        
+
         random_latent_vectors = tf.random.normal(shape = (batch_size, 100))
         with tf.GradientTape() as tape:
-            fake_samples = generator(random_latent_vectors, training = True)
-            #fake_samples = tf.dtypes.cast(fake_samples, tf.dtypes.float64)
-            print("real shape",real_samples.shape)
-            print("fake shape",fake_samples.shape)
-            fake_logits = discriminator(fake_samples, training = True)
-            real_logits = discriminator(real_samples, training = True)
-            d_loss = discriminator_loss(real_logits, fake_logits)
-            
-            gp = gradient_penalty(batch_size, real_samples, fake_samples)
-            d_loss = d_loss + gp * 10
-        d_gradients = tape.gradient(d_loss, discriminator.trainable_variables)
-        discriminator_optimizer.apply_gradients(zip(d_gradients, discriminator.trainable_variables))
-    
+            gen_samples = generator(random_latent_vectors, training = True)
+            gen_logits = discriminator(gen_samples, training = True)
+            g_loss = generator_loss(gen_logits)
 
-    random_latent_vectors = tf.random.normal(shape = (batch_size, 100))
-    with tf.GradientTape() as tape:
-        gen_samples = generator(random_latent_vectors, training = True)
-        gen_logits = discriminator(gen_samples, training = True)
-        g_loss = generator_loss(gen_logits)
+        g_gradients = tape.gradient(g_loss, generator.trainable_variables)
+        generator_optimizer.apply_gradients(zip(g_gradients, generator.trainable_variables))
+        print("Discriminator Loss:")
+        tf.print(d_loss, output_stream=sys.stderr)
+        print(" Generator Loss:")
+        tf.print(g_loss, output_stream=sys.stderr)
+        return {"d_loss":d_loss, "g_loss": g_loss}
+    else:
+        noise = tf.random.normal(shape = (batch_size, 100))
+        with tf.GradientTape() as gen_tape, tf.GradientTape() as disc_tape:
+            generated_samples = generator(noise, training = True)
+            real_out = discriminator(real_samples, training = True)
+            fake_out = discriminator(generated_samples, training = True)
 
-    g_gradients = tape.gradient(g_loss, generator.trainable_variables)
-    generator_optimizer.apply_gradients(zip(g_gradients, generator.trainable_variables))
+            gen_loss = generator_loss(fake_out)
+            disc_loss = discriminator_loss(real_out, fake_out)
 
-    return {"d_loss":d_loss, "g_loss": g_loss}
+        gen_gradients = gen_tape.gradient(gen_loss, generator.trainable_variables)
+        disc_gradients = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
+
+        generator_optimizer.apply_gradients(zip(gen_gradients, generator.trainable_variables))
+        discriminator_optimizer.apply_gradients(zip(disc_gradients, discriminator.trainable_variables))
+
 
 def train(dataset, epochs):
     for epoch in range(epochs):
         print("epoch #", epoch)
-        start = time.time()
         for batch in dataset:
-            train_step(batch)
-    
+            train_step(batch, 'simple')    
+
 X = load_data("data.json")
+squeezed = np.squeeze(X,axis = 2)
 print(X.dtype)
 generator = makeGen()
 discriminator = makeDisc()
