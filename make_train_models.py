@@ -8,6 +8,7 @@ import sys
 from scipy.io.wavfile import write as wavwrite
 
 tf.compat.v1.enable_eager_execution
+cross_entropy_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
 EPOCHS = 300
 def makeGen():
@@ -74,21 +75,27 @@ def load_data(dataset_path):
     X = np.array(data["snares"])
     return X.astype(dtype = np.float32)
 
-def generator_loss(fake_output):
-    return -tf.reduce_mean(fake_output)
+def generator_loss(fake_output, which):
+    if (which !='simple'):
+        return -tf.reduce_mean(fake_output)
+    return cross_entropy_fn(tf.ones_like(fake_output), fake_output)
 
-def discriminator_loss(real_sample, fake_sample):
-    #print(real_sample, fake_sample)
-    real_loss = tf.reduce_mean(real_sample)
-    fake_loss = tf.reduce_mean(fake_sample)
-    #print('real_loss')
-    #print(real_loss)
-    #print('fake_loss')
-    #print(fake_loss)
-    loss = fake_loss - real_loss
-    #print('loss')
-    #print(loss.shape)
-    return loss
+def discriminator_loss(real_sample, fake_sample, which):
+    if (which!='simple'):
+        #print(real_sample, fake_sample)
+        real_loss = tf.reduce_mean(real_sample)
+        fake_loss = tf.reduce_mean(fake_sample)
+        #print('real_loss')
+        #print(real_loss)
+        #print('fake_loss')
+        #print(fake_loss)
+        loss = fake_loss - real_loss
+        #print('loss')
+        #print(loss.shape)
+        return loss
+    real_loss = cross_entropy_fn(tf.ones_like(real_sample), real_sample)
+    fake_loss = cross_entropy_fn(tf.zeros_like(fake_sample), fake_sample)
+    return real_loss + fake_loss
 
 def gradient_penalty(batch_size, real_samples, fake_samples):
     alpha = tf.random.uniform(shape = [batch_size, 1,1], minval = 0., maxval = 1.)
@@ -114,7 +121,7 @@ def train_step(real_samples, which,dpg = 5):
                 fake_samples = generator(random_latent_vectors, training = True)
                 fake_logits = discriminator(fake_samples, training = True)
                 real_logits = discriminator(real_samples, training = True)
-                d_loss = discriminator_loss(real_logits, fake_logits)
+                d_loss = discriminator_loss(real_logits, fake_logits, 'gp')
                 
                 gp = gradient_penalty(batch_size, real_samples, fake_samples)
                 d_loss = d_loss + (gp * 10)
@@ -127,7 +134,7 @@ def train_step(real_samples, which,dpg = 5):
         with tf.GradientTape() as tape:
             gen_samples = generator(random_latent_vectors, training = True)
             gen_logits = discriminator(gen_samples, training = True)
-            g_loss = generator_loss(gen_logits)
+            g_loss = generator_loss(gen_logits, 'gp')
 
         g_gradients = tape.gradient(g_loss, generator.trainable_variables)
         generator_optimizer.apply_gradients(zip(g_gradients, generator.trainable_variables))
@@ -143,21 +150,35 @@ def train_step(real_samples, which,dpg = 5):
             real_out = discriminator(real_samples, training = True)
             fake_out = discriminator(generated_samples, training = True)
 
-            gen_loss = generator_loss(fake_out)
-            disc_loss = discriminator_loss(real_out, fake_out)
+            gen_loss = generator_loss(fake_out, 'simple')
+            disc_loss = discriminator_loss(real_out, fake_out,'simple')
 
         gen_gradients = gen_tape.gradient(gen_loss, generator.trainable_variables)
         disc_gradients = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
 
         generator_optimizer.apply_gradients(zip(gen_gradients, generator.trainable_variables))
         discriminator_optimizer.apply_gradients(zip(disc_gradients, discriminator.trainable_variables))
+        return {"d_loss":disc_loss, "g_loss": gen_loss}
+
 
 
 def train(dataset, epochs):
     for epoch in range(epochs):
+       
         print("epoch #", epoch)
+        if epoch % 200 == 0:
+            filename = "models/{}_at_epoch_{}.h5"
+            disc_filename = filename.format("disc",epoch)
+            gen_filename = filename.format("gen",epoch)
+            discriminator.save(disc_filename)
+            generator.save(gen_filename)
         for batch in dataset:
-            train_step(batch, 'simple')    
+            res = train_step(batch, 'simple') 
+        print("Discriminator Loss:")
+        tf.print(res['d_loss'], output_stream=sys.stderr)
+        print(" Generator Loss:")
+        tf.print(res['g_loss'], output_stream=sys.stderr)
+            
 
 X = load_data("data.json")
 squeezed = np.squeeze(X,axis = 2)
