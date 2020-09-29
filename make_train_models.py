@@ -10,7 +10,8 @@ from scipy.io.wavfile import write as wavwrite
 tf.compat.v1.enable_eager_execution
 cross_entropy_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
-EPOCHS = 300
+EPOCHS = 1600
+
 def makeGen():
     model = tf.keras.Sequential()
     model.add(Input(shape = (100,)))
