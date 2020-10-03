@@ -10,7 +10,7 @@ from scipy.io.wavfile import write as wavwrite
 tf.compat.v1.enable_eager_execution
 cross_entropy_fn = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 
-EPOCHS = 1600
+EPOCHS = 20000
 
 def makeGen():
     model = tf.keras.Sequential()
@@ -151,8 +151,8 @@ def train_step(real_samples, which,dpg = 5):
             real_out = discriminator(real_samples, training = True)
             fake_out = discriminator(generated_samples, training = True)
 
-            gen_loss = generator_loss(fake_out, 'simple')
-            disc_loss = discriminator_loss(real_out, fake_out,'simple')
+            gen_loss = generator_loss(fake_out, 'b')
+            disc_loss = discriminator_loss(real_out, fake_out,'b')
 
         gen_gradients = gen_tape.gradient(gen_loss, generator.trainable_variables)
         disc_gradients = disc_tape.gradient(disc_loss, discriminator.trainable_variables)
@@ -174,14 +174,15 @@ def train(dataset, epochs):
             discriminator.save(disc_filename)
             generator.save(gen_filename)
         for batch in dataset:
-            res = train_step(batch, 'simple') 
+            res = train_step(batch, 'banana') 
         print("Discriminator Loss:")
         tf.print(res['d_loss'], output_stream=sys.stderr)
         print(" Generator Loss:")
         tf.print(res['g_loss'], output_stream=sys.stderr)
             
-
+print("Loading data")
 X = load_data("data.json")
+print("Data loaded successfully")
 squeezed = np.squeeze(X,axis = 2)
 print(X.dtype)
 generator = makeGen()
